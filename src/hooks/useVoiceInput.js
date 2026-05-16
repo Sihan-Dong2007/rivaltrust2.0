@@ -17,9 +17,10 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { stopCurrentSpeech } from "../services/elevenlabs";
 
-const VOLUME_THRESHOLD = 18;  // 0-255; raise if too sensitive, lower if not triggering
-const VAD_POLL_MS      = 40;  // how often to sample the analyser
-const SILENCE_MS       = 1500; // quiet after last final segment → auto-submit
+const VOLUME_THRESHOLD = 30;   // raise if too sensitive, lower if not triggering
+const SPEECH_HOLD_MS   = 250;  // must stay above threshold for this long before triggering
+const VAD_POLL_MS      = 40;
+const SILENCE_MS       = 1500;
 
 export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
   const [isActive,   setIsActive]   = useState(false);
@@ -31,6 +32,7 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
   const audioCtxRef    = useRef(null);
   const analyserRef    = useRef(null);
   const vadTimerRef    = useRef(null);
+  const speechOnsetRef = useRef(null); // timestamp when volume first crossed threshold
 
   // Transcription refs
   const recognitionRef = useRef(null);
@@ -140,12 +142,22 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
       const speaking = volume > VOLUME_THRESHOLD;
 
       if (speaking && !isSpeakingRef.current) {
-        // User just started speaking — interrupt AI immediately
-        isSpeakingRef.current = true;
-        setIsSpeaking(true);
-        stopCurrentSpeech();
-        startRecognition();
-        clearSilence();
+        // Start measuring how long the volume has been above threshold
+        if (!speechOnsetRef.current) speechOnsetRef.current = Date.now();
+
+        const heldFor = Date.now() - speechOnsetRef.current;
+        if (heldFor >= SPEECH_HOLD_MS) {
+          // Sustained speech confirmed — trigger
+          isSpeakingRef.current = true;
+          setIsSpeaking(true);
+          stopCurrentSpeech();
+          startRecognition();
+          clearSilence();
+          speechOnsetRef.current = null;
+        }
+      } else if (!speaking) {
+        // Volume dropped — reset the onset timer
+        speechOnsetRef.current = null;
       }
 
       if (!speaking && isSpeakingRef.current) {
