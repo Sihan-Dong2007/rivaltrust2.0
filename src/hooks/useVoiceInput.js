@@ -1,137 +1,113 @@
 // ─────────────────────────────────────────────────────────────
 //  hooks/useVoiceInput.js
 //
-//  Two-layer voice pipeline:
+//  VAD (AudioContext) → MediaRecorder → ElevenLabs Scribe STT
 //
-//  Layer 1 — VAD (Voice Activity Detection)
-//    getUserMedia({ echoCancellation: true }) → AudioContext analyser
-//    This stream has AI echo removed at the OS/browser level,
-//    so volume spikes here = real user speech, not AI playback.
-//
-//  Layer 2 — Transcription
-//    SpeechRecognition starts only when VAD confirms real speech.
-//    By that point stopCurrentSpeech() has already fired,
-//    so the AI is silent and SpeechRecognition won't pick it up.
+//  Flow:
+//  1. AudioContext polls volume every 40ms
+//  2. Volume > 30 for 250ms → start MediaRecorder
+//  3. Silence 1.5s → stop recording → send to Scribe
+//  4. Scribe returns text → onSubmit
 // ─────────────────────────────────────────────────────────────
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { stopCurrentSpeech } from "../services/elevenlabs";
 
-const VOLUME_THRESHOLD = 30;   // raise if too sensitive, lower if not triggering
-const SPEECH_HOLD_MS   = 250;  // must stay above threshold for this long before triggering
-const VAD_POLL_MS      = 40;
+const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY ?? "";
+
+const VOLUME_THRESHOLD = 30;
+const SPEECH_HOLD_MS   = 250;
 const SILENCE_MS       = 1500;
+const VAD_POLL_MS      = 40;
 
 export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
-  const [isActive,   setIsActive]   = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false); // user currently speaking
-  const [liveText,   setLiveText]   = useState("");
+  const [isActive,    setIsActive]    = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [status,      setStatus]      = useState("");
 
-  // VAD refs
-  const streamRef      = useRef(null);
-  const audioCtxRef    = useRef(null);
-  const analyserRef    = useRef(null);
-  const vadTimerRef    = useRef(null);
-  const speechOnsetRef = useRef(null); // timestamp when volume first crossed threshold
+  const streamRef        = useRef(null);
+  const audioCtxRef      = useRef(null);
+  const vadTimerRef      = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const chunksRef        = useRef([]);
+  const silenceRef       = useRef(null);
+  const speechOnsetRef   = useRef(null);
 
-  // Transcription refs
-  const recognitionRef = useRef(null);
-  const recActiveRef   = useRef(false); // is SpeechRecognition currently started?
-
-  // State refs (readable inside closures)
   const isActiveRef    = useRef(false);
+  const isRecordingRef = useRef(false);
   const aiSpeakingRef  = useRef(false);
-  const isSpeakingRef  = useRef(false);
 
-  // Silence / accumulation
-  const finalTextRef   = useRef("");
-  const silenceRef     = useRef(null);
-
-  // ── helpers ──────────────────────────────────────────────────
   const clearSilence = () => {
     if (silenceRef.current) { clearTimeout(silenceRef.current); silenceRef.current = null; }
   };
 
-  const submitAccumulated = useCallback(() => {
-    const text = finalTextRef.current.trim();
-    if (!text) return;
-    finalTextRef.current = "";
-    setLiveText("");
-    setIsSpeaking(false);
-    isSpeakingRef.current = false;
-    onSubmit(text);
+  // ── ElevenLabs Scribe ─────────────────────────────────────────
+  const transcribeAndSubmit = useCallback(async (blob) => {
+    setStatus("Transcribing…");
+    try {
+      const form = new FormData();
+      form.append("file", blob, "audio.webm");
+      form.append("model_id", "scribe_v1");
+
+      const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+        method: "POST",
+        headers: { "xi-api-key": ELEVENLABS_API_KEY },
+        body: form,
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+      const { text } = await res.json();
+      if (text?.trim()) onSubmit(text.trim());
+    } catch (err) {
+      console.error("Scribe error:", err);
+    } finally {
+      setStatus("");
+      setIsRecording(false);
+      isRecordingRef.current = false;
+    }
   }, [onSubmit]);
 
-  // ── SpeechRecognition (transcription only) ───────────────────
-  const buildRecognition = useCallback(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return null;
+  // ── MediaRecorder controls ────────────────────────────────────
+  const stopRecording = useCallback((submit) => {
+    clearSilence();
+    const mr = mediaRecorderRef.current;
+    if (!mr || mr.state === "inactive") return;
 
-    const rec = new SR();
-    rec.continuous     = true;
-    rec.interimResults = true;
-    rec.lang           = "en-US";
-
-    rec.onresult = (event) => {
-      let interim = "";
-      let finalSeg = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const r = event.results[i];
-        if (r.isFinal) finalSeg += r[0].transcript;
-        else           interim  += r[0].transcript;
-      }
-      if (finalSeg) {
-        finalTextRef.current += finalSeg + " ";
-        clearSilence();
-        silenceRef.current = setTimeout(submitAccumulated, SILENCE_MS);
-      }
-      setLiveText(finalTextRef.current + interim);
-    };
-
-    rec.onerror = (e) => {
-      if (e.error !== "no-speech" && e.error !== "aborted") {
-        console.warn("SpeechRecognition:", e.error);
+    mr.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+      chunksRef.current = [];
+      if (submit) {
+        transcribeAndSubmit(blob);
+      } else {
+        setIsRecording(false);
+        isRecordingRef.current = false;
+        setStatus("");
       }
     };
+    try { mr.stop(); } catch (_) {}
+  }, [transcribeAndSubmit]);
 
-    // SpeechRecognition stops on its own sometimes — restart if still needed
-    rec.onend = () => {
-      recActiveRef.current = false;
-      if (isActiveRef.current && isSpeakingRef.current && !aiSpeakingRef.current) {
-        try { rec.start(); recActiveRef.current = true; } catch (_) {}
-      }
-    };
-
-    return rec;
-  }, [submitAccumulated]);
-
-  const startRecognition = useCallback(() => {
-    if (recActiveRef.current) return;
-    if (!recognitionRef.current) {
-      recognitionRef.current = buildRecognition();
-    }
-    if (!recognitionRef.current) return;
-    try {
-      recognitionRef.current.start();
-      recActiveRef.current = true;
-    } catch (_) {}
-  }, [buildRecognition]);
-
-  const stopRecognition = useCallback(() => {
-    recActiveRef.current = false;
-    try { recognitionRef.current?.stop(); } catch (_) {}
+  const startRecording = useCallback(() => {
+    if (!streamRef.current || isRecordingRef.current) return;
+    stopCurrentSpeech();
+    chunksRef.current = [];
+    const mr = new MediaRecorder(streamRef.current, { mimeType: "audio/webm" });
+    mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+    mediaRecorderRef.current = mr;
+    mr.start();
+    isRecordingRef.current = true;
+    setIsRecording(true);
+    setStatus("Recording…");
   }, []);
 
-  // ── VAD loop (AudioContext on echo-cancelled stream) ─────────
+  // ── VAD loop ──────────────────────────────────────────────────
   const startVAD = useCallback((stream) => {
     const ctx      = new AudioContext();
     const source   = ctx.createMediaStreamSource(stream);
     const analyser = ctx.createAnalyser();
     analyser.fftSize = 256;
     source.connect(analyser);
-
-    audioCtxRef.current  = ctx;
-    analyserRef.current  = analyser;
+    audioCtxRef.current = ctx;
 
     const data = new Uint8Array(analyser.frequencyBinCount);
 
@@ -139,134 +115,88 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
       if (!isActiveRef.current) return;
       analyser.getByteFrequencyData(data);
       const volume = data.reduce((a, b) => a + b, 0) / data.length;
-      const speaking = volume > VOLUME_THRESHOLD;
+      const loud   = volume > VOLUME_THRESHOLD;
 
-      if (speaking && !isSpeakingRef.current) {
-        // Start measuring how long the volume has been above threshold
+      if (loud && !isRecordingRef.current) {
         if (!speechOnsetRef.current) speechOnsetRef.current = Date.now();
-
-        const heldFor = Date.now() - speechOnsetRef.current;
-        if (heldFor >= SPEECH_HOLD_MS) {
-          // Sustained speech confirmed — trigger
-          isSpeakingRef.current = true;
-          setIsSpeaking(true);
-          stopCurrentSpeech();
-          startRecognition();
-          clearSilence();
+        if (Date.now() - speechOnsetRef.current >= SPEECH_HOLD_MS) {
           speechOnsetRef.current = null;
+          startRecording();
         }
-      } else if (!speaking) {
-        // Volume dropped — reset the onset timer
+      } else if (loud && isRecordingRef.current) {
         speechOnsetRef.current = null;
-      }
-
-      if (!speaking && isSpeakingRef.current) {
-        // Volume dropped — don't mark as silent immediately;
-        // the SILENCE_MS timer from SpeechRecognition handles the final submit.
-        // But update the visual indicator after a brief dip.
-        // (We keep isSpeakingRef true so recognition stays open.)
+        clearSilence();
+      } else if (!loud) {
+        speechOnsetRef.current = null;
+        if (isRecordingRef.current && !silenceRef.current) {
+          silenceRef.current = setTimeout(() => stopRecording(true), SILENCE_MS);
+        }
       }
 
       vadTimerRef.current = setTimeout(poll, VAD_POLL_MS);
     };
 
     poll();
-  }, [startRecognition]);
+  }, [startRecording, stopRecording]);
 
-  // ── public: toggle ────────────────────────────────────────────
+  // ── Public controls ───────────────────────────────────────────
   const startListening = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation:  true,
-          noiseSuppression:  true,
-          autoGainControl:   true,
-        },
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       streamRef.current   = stream;
       isActiveRef.current = true;
       setIsActive(true);
-      setLiveText("");
-      finalTextRef.current = "";
-      recognitionRef.current = buildRecognition();
+      setStatus("");
       startVAD(stream);
     } catch (err) {
-      console.error("Microphone access denied:", err);
+      console.error("Mic denied:", err);
     }
-  }, [buildRecognition, startVAD]);
+  }, [startVAD]);
 
   const stopListening = useCallback(() => {
-    isActiveRef.current   = false;
-    isSpeakingRef.current = false;
+    isActiveRef.current = false;
     setIsActive(false);
-    setIsSpeaking(false);
-    setLiveText("");
-    finalTextRef.current = "";
+    setIsRecording(false);
+    isRecordingRef.current = false;
+    setStatus("");
     clearSilence();
-
-    // Stop VAD loop
     if (vadTimerRef.current) { clearTimeout(vadTimerRef.current); vadTimerRef.current = null; }
-
-    // Stop recognition
-    stopRecognition();
-    recognitionRef.current = null;
-
-    // Tear down AudioContext and mic stream
+    stopRecording(false);
     audioCtxRef.current?.close();
     audioCtxRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
-  }, [stopRecognition]);
+  }, [stopRecording]);
 
   const toggleListening = useCallback(() => {
     if (isActive) stopListening();
     else           startListening();
   }, [isActive, startListening, stopListening]);
 
-  // ── pause recognition while AI speaks ────────────────────────
-  // VAD won't false-trigger (echo cancelled), but SpeechRecognition
-  // might still hear residual audio — stop it while AI is speaking.
+  // AI 开始说话时丢弃正在录的音频
   useEffect(() => {
     aiSpeakingRef.current = aiSpeaking;
     if (!isActive) return;
+    if (aiSpeaking && isRecordingRef.current) stopRecording(false);
+  }, [aiSpeaking, isActive, stopRecording]);
 
-    if (aiSpeaking) {
-      // Pause transcription; VAD keeps running but won't trigger
-      // (echo-cancelled stream has near-zero volume during AI speech)
-      stopRecognition();
-      clearSilence();
-      finalTextRef.current = "";
-      setLiveText("");
-      isSpeakingRef.current = false;
-      setIsSpeaking(false);
-    }
-    // When aiSpeaking goes false: VAD will restart recognition
-    // naturally on next voice detection event — no need to force it.
-  }, [aiSpeaking, isActive, stopRecognition]);
-
-  // ── cleanup on unmount ────────────────────────────────────────
   useEffect(() => {
     return () => {
       isActiveRef.current = false;
       if (vadTimerRef.current) clearTimeout(vadTimerRef.current);
-      stopRecognition();
       audioCtxRef.current?.close();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       clearSilence();
     };
-  }, [stopRecognition]);
-
-  const isSupported = !!(
-    navigator.mediaDevices?.getUserMedia &&
-    (window.SpeechRecognition || window.webkitSpeechRecognition)
-  );
+  }, []);
 
   return {
-    isSupported,
+    isSupported: !!navigator.mediaDevices?.getUserMedia,
     isActive,
-    isSpeaking,
-    liveText,
+    isRecording,
+    status,
     toggleListening,
-    stopListening,
   };
 }

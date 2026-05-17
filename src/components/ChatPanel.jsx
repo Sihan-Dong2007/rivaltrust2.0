@@ -28,8 +28,8 @@ export default function ChatPanel({ messages, activeStep, loading, aiSpeaking, s
   const {
     isSupported,
     isActive:    micActive,
-    isSpeaking:  userSpeaking,
-    liveText,
+    isRecording,
+    status:      voiceStatus,
     toggleListening,
   } = useVoiceInput({ onSubmit: sendMessage, aiSpeaking });
 
@@ -161,7 +161,7 @@ export default function ChatPanel({ messages, activeStep, loading, aiSpeaking, s
         flexShrink: 0,
       }}>
 
-        {/* Live voice transcript — shown while mic is active */}
+        {/* Voice status — shown while mic is active */}
         {micActive && (
           <div style={{
             marginBottom: "10px",
@@ -170,24 +170,22 @@ export default function ChatPanel({ messages, activeStep, loading, aiSpeaking, s
             alignItems: "center",
             gap: "8px",
           }}>
-            {/* Speaking pulse dot */}
             <div style={{
               width: "8px",
               height: "8px",
               borderRadius: "50%",
-              background: userSpeaking ? "#c4a484" : "rgba(196,164,132,0.25)",
+              background: isRecording ? "#c4a484" : "rgba(196,164,132,0.25)",
               flexShrink: 0,
-              animation: userSpeaking ? "pulse 0.7s ease-in-out infinite" : "none",
+              animation: isRecording ? "pulse 0.7s ease-in-out infinite" : "none",
               transition: "background 0.2s",
             }} />
             <div style={{
-              fontFamily: "'Lora', Georgia, serif",
-              fontSize: "13px",
-              color: liveText ? "rgba(240,230,211,0.75)" : "rgba(255,255,255,0.18)",
-              fontStyle: liveText ? "normal" : "italic",
-              lineHeight: "1.5",
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontSize: "11px",
+              color: voiceStatus ? "rgba(196,164,132,0.8)" : "rgba(255,255,255,0.18)",
+              fontStyle: "italic",
             }}>
-              {liveText || (userSpeaking ? "…" : "Listening — speak to respond")}
+              {voiceStatus || "Listening — speak to respond"}
             </div>
           </div>
         )}
@@ -231,7 +229,7 @@ export default function ChatPanel({ messages, activeStep, loading, aiSpeaking, s
               title={micActive ? "Stop microphone" : "Start microphone"}
               style={{
                 background: micActive
-                  ? (userSpeaking ? "#c4a484" : "rgba(196,164,132,0.22)")
+                  ? (isRecording ? "#c4a484" : "rgba(196,164,132,0.22)")
                   : "rgba(255,255,255,0.06)",
                 border: `1px solid ${micActive ? "rgba(196,164,132,0.45)" : "rgba(255,255,255,0.1)"}`,
                 borderRadius: "8px",
@@ -245,7 +243,7 @@ export default function ChatPanel({ messages, activeStep, loading, aiSpeaking, s
                 alignItems: "center",
                 justifyContent: "center",
                 flexShrink: 0,
-                animation: userSpeaking ? "pulse 0.7s ease-in-out infinite" : "none",
+                animation: isRecording ? "pulse 0.7s ease-in-out infinite" : "none",
               }}
             >
               {micActive ? "🎙" : "🎤"}
