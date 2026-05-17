@@ -46,7 +46,8 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
     setStatus("Transcribing…");
     try {
       const form = new FormData();
-      form.append("file", blob, "audio.webm");
+      const ext = blob.type.includes("mp4") ? "mp4" : "webm";
+      form.append("file", blob, `audio.${ext}`);
       form.append("model_id", "scribe_v1");
 
       const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
@@ -74,7 +75,8 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
     if (!mr || mr.state === "inactive") return;
 
     mr.onstop = () => {
-      const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+      const mimeType = mr.mimeType || "audio/webm";
+      const blob = new Blob(chunksRef.current, { type: mimeType });
       chunksRef.current = [];
       if (submit) {
         transcribeAndSubmit(blob);
@@ -91,7 +93,8 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
     if (!streamRef.current || isRecordingRef.current) return;
     stopCurrentSpeech();
     chunksRef.current = [];
-    const mr = new MediaRecorder(streamRef.current, { mimeType: "audio/webm" });
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+    const mr = new MediaRecorder(streamRef.current, { mimeType });
     mr.ondataavailable = (e) => { if (e.data.size > 0) chunksRef.current.push(e.data); };
     mediaRecorderRef.current = mr;
     mr.start();
