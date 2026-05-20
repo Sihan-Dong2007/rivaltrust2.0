@@ -20,7 +20,7 @@
 
 import { useState, useCallback } from "react";
 import { callRival, callEvaluator, callFacilitator } from "../services/llm";
-import { speak, speakFiller } from "../services/elevenlabs";
+import { speak, speakFiller, unlockAudio } from "../services/elevenlabs";
 import { detect } from "../services/detector";
 import { RIVAL_SYSTEM, EVALUATOR_SYSTEM, FACILITATOR_SYSTEM } from "../config/prompts";
 
@@ -76,6 +76,7 @@ export function useConversation() {
 
   const sendMessage = useCallback(async (text) => {
     if (!text.trim() || loading) return;
+    unlockAudio(); // Safari: must be called before any await, while still in gesture context
 
     setLoading(true);
     addMessage({ role: "user", content: text });

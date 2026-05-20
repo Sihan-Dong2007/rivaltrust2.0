@@ -13,20 +13,33 @@
 
 const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY ?? "";
 
-// Tracks the currently playing Audio element so it can be interrupted
-let _currentAudio = null;
+// Web Audio API — avoids all Safari HTMLAudioElement + blob URL restrictions.
+// AudioContext stays in "running" state once resumed during a user gesture,
+// so subsequent async decodeAudioData + start() calls work without restriction.
+let _audioCtx = null;
+let _currentSource = null;
 let _currentResolve = null;
+
+/**
+ * Call this synchronously inside a user-gesture handler (before any await).
+ * Creates and resumes the AudioContext while Safari allows it.
+ */
+export function unlockAudio() {
+  if (_audioCtx) return;
+  _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  _audioCtx.resume().catch(() => {});
+}
 
 /** Stop whatever AI audio is playing right now (called on user speech start). */
 export function stopCurrentSpeech() {
-  if (_currentAudio) {
-    _currentAudio.pause();
-    _currentAudio = null;
+  if (_currentSource) {
+    try { _currentSource.stop(); } catch (_) {}
+    _currentSource = null;
   }
   if (_currentResolve) {
     const resolve = _currentResolve;
     _currentResolve = null;
-    resolve(); // let speak()'s promise settle so useConversation can proceed
+    resolve();
   }
   if (window.speechSynthesis) {
     window.speechSynthesis.cancel();
@@ -71,7 +84,7 @@ export async function speak(text, role = "rival") {
   }
 
   const res = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
+    `/api/elevenlabs/v1/text-to-speech/${voiceId}/stream`,
     {
       method: "POST",
       headers: {
@@ -105,24 +118,32 @@ export async function speakFiller() {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-function playBlob(blob) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
+async function playBlob(blob) {
+  if (!_audioCtx) {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (_audioCtx.state === "suspended") {
+    await _audioCtx.resume();
+  }
 
-    const cleanup = () => {
-      URL.revokeObjectURL(url);
-      _currentAudio = null;
+  const arrayBuffer = await blob.arrayBuffer();
+  const audioBuffer = await _audioCtx.decodeAudioData(arrayBuffer);
+
+  return new Promise((resolve) => {
+    const source = _audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(_audioCtx.destination);
+
+    _currentSource = source;
+    _currentResolve = () => { _currentSource = null; _currentResolve = null; resolve(); };
+
+    source.onended = () => {
+      _currentSource = null;
       _currentResolve = null;
+      resolve();
     };
 
-    audio.onended = () => { cleanup(); resolve(); };
-    audio.onerror = (err) => { cleanup(); reject(err); };
-
-    _currentAudio = audio;
-    _currentResolve = () => { cleanup(); resolve(); };
-
-    audio.play();
+    source.start(0);
   });
 }
 

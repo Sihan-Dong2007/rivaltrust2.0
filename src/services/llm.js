@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────
 
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY ?? "";
-const GROQ_BASE    = "https://api.groq.com/openai/v1";
+const GROQ_BASE    = "/api/groq/openai/v1";
 
 export const MODELS = {
   rival:       "llama-3.3-70b-versatile",  // strongest — needs nuanced persona
