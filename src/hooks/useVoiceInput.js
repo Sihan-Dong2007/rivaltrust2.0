@@ -1,14 +1,6 @@
-// ─────────────────────────────────────────────────────────────
-//  hooks/useVoiceInput.js
-//
-//  VAD (AudioContext) → MediaRecorder → ElevenLabs Scribe STT
-//
-//  Flow:
-//  1. AudioContext polls volume every 40ms
-//  2. Volume > 30 for 250ms → start MediaRecorder
-//  3. Silence 1.5s → stop recording → send to Scribe
-//  4. Scribe returns text → onSubmit
-// ─────────────────────────────────────────────────────────────
+// useVoiceInput.js
+// AudioContext VAD → MediaRecorder → ElevenLabs Scribe
+// volume > 30 for 250ms triggers recording, 1.5s silence ends it
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { stopCurrentSpeech } from "../services/elevenlabs";
@@ -41,7 +33,7 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
     if (silenceRef.current) { clearTimeout(silenceRef.current); silenceRef.current = null; }
   };
 
-  // ── ElevenLabs Scribe ─────────────────────────────────────────
+  // send completed audio blob to Scribe, submit transcript on success
   const transcribeAndSubmit = useCallback(async (blob) => {
     setStatus("Transcribing…");
     try {
@@ -68,7 +60,7 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
     }
   }, [onSubmit]);
 
-  // ── MediaRecorder controls ────────────────────────────────────
+  // stop: if submit=true, transcribe; if false, just discard
   const stopRecording = useCallback((submit) => {
     clearSilence();
     const mr = mediaRecorderRef.current;
@@ -103,7 +95,7 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
     setStatus("Recording…");
   }, []);
 
-  // ── VAD loop ──────────────────────────────────────────────────
+  // poll volume every 40ms; sustained loudness starts recording, silence ends it
   const startVAD = useCallback((stream) => {
     const ctx      = new AudioContext();
     const source   = ctx.createMediaStreamSource(stream);
@@ -142,7 +134,6 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
     poll();
   }, [startRecording, stopRecording]);
 
-  // ── Public controls ───────────────────────────────────────────
   const startListening = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({

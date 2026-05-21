@@ -1,22 +1,5 @@
-// ─────────────────────────────────────────────────────────────
-//  hooks/useConversation.js
-//  All conversation state and turn-flow logic.
-//
-//  Two-layer detection:
-//  Layer 1 — rule-based detector (pure JS, instant)
-//            Only escalates if a signal is found.
-//  Layer 2 — Evaluator LLM (llama 70b, only called when needed)
-//            Makes the final intervene: true/false call.
-//
-//  Turn flow:
-//  User sends
-//  → Rival draft generates (always)
-//  → detector runs (instant, parallel with Rival)
-//  → if detector.flag:false  → use Rival draft immediately
-//  → if detector.flag:true   → call Evaluator LLM
-//      → if intervene:false  → use Rival draft
-//      → if intervene:true   → discard draft, Facilitator speaks
-// ─────────────────────────────────────────────────────────────
+// useConversation.js
+// turn flow: Rival + Detector run in parallel, Evaluator only called if Detector flags something
 
 import { useState, useCallback } from "react";
 import { callRival, callEvaluator, callFacilitator } from "../services/llm";
@@ -62,7 +45,7 @@ export function useConversation() {
     setMessages((prev) => [...prev, { id: crypto.randomUUID(), ...msg }]);
   }, []);
 
-  // Wraps speak() so aiSpeaking flag is set while audio plays
+  // keeps aiSpeaking true for the duration of playback
   const speakWithFlag = useCallback(async (text, role) => {
     setAiSpeaking(true);
     try { await speak(text, role); } finally { setAiSpeaking(false); }
@@ -82,30 +65,26 @@ export function useConversation() {
     addMessage({ role: "user", content: text });
     setTurnCount((n) => n + 1);
 
-    // ── Step 1: start parallel processing ─────────────────────
+    // kick off rival + detector in parallel
     await goTo("parallel", 150);
 
     const history     = toApiHistory(messages);
     const userTurn    = { role: "user", content: text };
     const fullHistory = [...history, userTurn];
 
-    // Animate rival node while waiting for draft
     setActiveStep("rival");
 
-    // Rival draft and detector LLM run in parallel (both async)
     const rivalPromise    = callRival(RIVAL_SYSTEM, fullHistory);
     const detectorPromise = detect(text, history);
 
-    // Show detector step briefly
     await goTo("detector", 600);
 
-    // Wait for both to complete
     const [rivalDraft, detectorResult] = await Promise.all([rivalPromise, detectorPromise]);
 
     await new Promise((r) => setTimeout(r, 200));
 
     if (!detectorResult.flag) {
-      // ── Layer 1 clear: no risk signal → skip Evaluator ──────
+      // clean — go straight to output
       await goTo("clear", 100);
       await new Promise((r) => setTimeout(r, 350));
       await goTo("tts", 100);
@@ -116,12 +95,12 @@ export function useConversation() {
       await goTo("speaking", 100);
 
     } else {
-      // ── Layer 1 flagged: escalate to Evaluator LLM ───────────
+      // something flagged — call Evaluator for final judgment
       await goTo("escalate", 100);
       await new Promise((r) => setTimeout(r, 300));
       await goTo("evaluator", 100);
 
-      // Build focused context for the Evaluator
+      // last 4 turns, flattened to a single user message so Evaluator sees clean context
       const recentForEval = fullHistory.slice(-4).map((m) => ({
         role: "user",
         content: `${m.role.toUpperCase()}: ${m.content}`,
@@ -129,12 +108,11 @@ export function useConversation() {
 
       const evalResult = await callEvaluator(EVALUATOR_SYSTEM, recentForEval);
 
-      // ── Step 2: router reads evaluator JSON ─────────────────
       await goTo("router", 100);
       await new Promise((r) => setTimeout(r, 350));
 
       if (!evalResult.intervene) {
-        // Evaluator says false alarm → use Rival draft
+        // false alarm — rival goes through
         await goTo("pass", 100);
         await new Promise((r) => setTimeout(r, 300));
         await goTo("tts", 100);
@@ -145,13 +123,12 @@ export function useConversation() {
         await goTo("speaking", 100);
 
       } else {
-        // Evaluator confirms → Facilitator intervenes
         setLastTrigger(evalResult.trigger);
         setLastReason(evalResult.reason);
 
         await goTo("intervene", 100);
 
-        // Play filler while Facilitator generates
+        // play filler sound while waiting on Facilitator LLM — hides the latency
         addMessage({ role: "system", content: "Facilitator stepping in…" });
         setAiSpeaking(true);
         const [facResponse] = await Promise.all([
@@ -170,7 +147,6 @@ export function useConversation() {
       }
     }
 
-    // ── Done ──────────────────────────────────────────────────
     await goTo("idle", 600);
     setLoading(false);
 

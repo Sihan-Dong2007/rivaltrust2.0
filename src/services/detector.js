@@ -1,15 +1,5 @@
-// ─────────────────────────────────────────────────────────────
-//  services/detector.js
-//  Lightweight LLM-based pre-filter.
-//  Uses llama-3.1-8b-instant (fast model) to quickly scan for
-//  obvious risk signals before escalating to the heavy Evaluator.
-//
-//  Returns:
-//    { flag: false }
-//    { flag: true, signal: "hostility"|"abstraction"|"loop" }
-//
-//  Only if flag:true do we escalate to the Evaluator LLM (70b).
-// ─────────────────────────────────────────────────────────────
+// detector.js — fast pre-filter before the Evaluator
+// returns { flag: false } or { flag: true, signal: "hostility"|"abstraction"|"loop" }
 
 const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY ?? "";
 const GROQ_BASE    = "https://api.groq.com/openai/v1";
@@ -34,12 +24,6 @@ If no signal:
 If signal detected:
 {"flag": true, "signal": "hostility"|"abstraction"|"loop"}`;
 
-/**
- * Run the lightweight detector LLM.
- * @param {string} currentText   — user's current message
- * @param {Array}  recentMessages — last 3-4 messages [{role, content}]
- * @returns {Promise<{flag: boolean, signal?: string}>}
- */
 export async function detect(currentText, recentMessages = []) {
   try {
     // Build a focused context string
@@ -69,7 +53,7 @@ export async function detect(currentText, recentMessages = []) {
 
     if (!res.ok) {
       console.error("Detector LLM error:", res.status);
-      return { flag: false }; // fail open — don't block conversation
+      return { flag: false }; // fail open
     }
 
     const data = await res.json();
@@ -79,6 +63,6 @@ export async function detect(currentText, recentMessages = []) {
 
   } catch (err) {
     console.error("Detector parse error:", err);
-    return { flag: false }; // fail open
+    return { flag: false };
   }
 }
