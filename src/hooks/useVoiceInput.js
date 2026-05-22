@@ -5,8 +5,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { stopCurrentSpeech } from "../services/elevenlabs";
 
-const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY ?? "";
-
 const VOLUME_THRESHOLD = 30;
 const SPEECH_HOLD_MS   = 250;
 const SILENCE_MS       = 1500;
@@ -42,9 +40,8 @@ export function useVoiceInput({ onSubmit, aiSpeaking = false }) {
       form.append("file", blob, `audio.${ext}`);
       form.append("model_id", "scribe_v1");
 
-      const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+      const res = await fetch("/api/elevenlabs/v1/speech-to-text", {
         method: "POST",
-        headers: { "xi-api-key": ELEVENLABS_API_KEY },
         body: form,
       });
 

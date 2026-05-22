@@ -1,7 +1,6 @@
 // llm.js — Groq API calls for all three roles
 
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY ?? "";
-const GROQ_BASE    = "/api/groq/openai/v1";
+const GROQ_BASE = "/api/groq/openai/v1";
 
 export const MODELS = {
   rival:       "llama-3.3-70b-versatile",  // needs the bigger model for persona depth
@@ -14,7 +13,6 @@ async function callGroq(model, system, messages) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${GROQ_API_KEY}`,
     },
     body: JSON.stringify({
       model,

@@ -1,8 +1,7 @@
 // detector.js — fast pre-filter before the Evaluator
 // returns { flag: false } or { flag: true, signal: "hostility"|"abstraction"|"loop" }
 
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY ?? "";
-const GROQ_BASE    = "https://api.groq.com/openai/v1";
+const GROQ_BASE = "/api/groq/openai/v1";
 const DETECTOR_MODEL = "llama-3.1-8b-instant";
 
 const DETECTOR_PROMPT = `You are a fast pre-filter for a conversation monitoring system.
@@ -38,7 +37,6 @@ export async function detect(currentText, recentMessages = []) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${GROQ_API_KEY}`,
       },
       body: JSON.stringify({
         model: DETECTOR_MODEL,

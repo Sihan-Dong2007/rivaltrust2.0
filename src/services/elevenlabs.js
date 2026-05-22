@@ -1,7 +1,5 @@
 // elevenlabs.js — TTS playback and interruption
 
-const ELEVENLABS_API_KEY = import.meta.env.VITE_ELEVENLABS_API_KEY ?? "";
-
 // using Web Audio API instead of HTMLAudioElement — Safari blocks blob URLs from async contexts
 let _audioCtx = null;
 let _currentSource = null;
@@ -57,7 +55,6 @@ export async function speak(text, role = "rival") {
     {
       method: "POST",
       headers: {
-        "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
