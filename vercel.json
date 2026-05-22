@@ -1,4 +1,9 @@
 {
   "buildCommand": "npm run build",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "rewrites": [
+    { "source": "/api/groq/:path*", "destination": "/api/groq/[...path]" },
+    { "source": "/api/elevenlabs/:path*", "destination": "/api/elevenlabs/[...path]" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
