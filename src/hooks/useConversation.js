@@ -5,7 +5,7 @@ import { useState, useCallback } from "react";
 import { callRival, callEvaluator, callFacilitator } from "../services/llm";
 import { speak, speakFiller, unlockAudio } from "../services/elevenlabs";
 import { detect } from "../services/detector";
-import { RIVAL_SYSTEM, EVALUATOR_SYSTEM, FACILITATOR_SYSTEM } from "../config/prompts";
+import { RIVAL_SYSTEM as RIVAL_SYSTEM_DEFAULT, EVALUATOR_SYSTEM, FACILITATOR_SYSTEM } from "../config/prompts";
 
 export const ARCH_STEPS = [
   { id: "idle",        label: "Waiting",               desc: "Waiting for user input" },
@@ -32,7 +32,8 @@ function toApiHistory(messages) {
     }));
 }
 
-export function useConversation() {
+export function useConversation(rivalSystemOverride) {
+  const RIVAL_SYSTEM = rivalSystemOverride || RIVAL_SYSTEM_DEFAULT;
   const [messages,    setMessages]    = useState([]);
   const [activeStep,  setActiveStep]  = useState("idle");
   const [loading,     setLoading]     = useState(false);

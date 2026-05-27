@@ -3,11 +3,14 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 import { fileURLToPath } from "url";
 import path from "path";
 import * as dotenv from "dotenv";
+import { matchRespondent } from "./anes-matcher.js";
 
 dotenv.config();
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+app.use(express.json());
 
 // Proxy Groq — inject API key server-side, never exposed to browser
 app.use(
@@ -43,6 +46,18 @@ app.use(
     },
   })
 );
+
+// ANES respondent matcher — real-time query from full dataset
+app.post("/api/match-respondent", async (req, res) => {
+  try {
+    const { persona_id, statement } = req.body;
+    const result = await matchRespondent(persona_id, statement, process.env.GROQ_API_KEY);
+    res.json(result);
+  } catch (err) {
+    console.error("[match-respondent]", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Serve the Vite production build
 app.use(express.static(path.join(__dirname, "../dist")));
